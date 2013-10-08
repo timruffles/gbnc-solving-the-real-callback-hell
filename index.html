@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<head>
+    <meta charset="utf-8">  
+    <title>Solving the real callback hell</title>
+    <link rel="stylesheet" href="reveal/css/reveal.css">
+    <link rel="stylesheet" href="reveal/css/theme/solarized.css" id="theme">
+    <!-- <link rel="stylesheet" href="reveal/css/print/pdf.css"> -->
+
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- For syntax highlighting reveal/-->
+    <link rel="stylesheet" href="reveal/lib/css/zenburn.css">
+</head>
+
+<body>
+
+<div class="reveal">
+<div class="slides">
+
+<section data-markdown data-state="highlight"><script type="text/template">
+
+  # Solving the real callback hell
+
+  ### @timruffles
+  ### sidekickjs.com
+
+</script>
+</section>
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+  
+  # We got callback hell wrong
+
+</script>
+<aside class="notes">
+  See v visible problems, not real problems
+</aside>
+</section>
+
+<section data-markdown><script type="text/template">
+
+  <img src="./doom.png" style="width:100%;height:100%" />
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Pyramids do really happen
+
+  - Nameless code from github
+  - For a PaaS
+
+  ```
+// main body of function omitted to protect sanity
+                  });
+                }
+              });
+            });
+          }
+        });
+      }
+    });
+};
+// oh it's only five callbacks
+  ```
+
+</script></section>
+
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+  
+  # But they don't need to
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+  
+  ```javascript
+  getUser(params["id"],function(err,user) {
+    if(!user) return res.send(404);
+    getProfile(user,function(err,profile) {
+      if(err) return res.send(500);
+      if(profile) {
+        update(user,profile,params,function(err) {
+          if(err) return res.send(500);
+          res.send(profile);
+        })
+      } else {
+        create(user,params,function(err,profile) {
+          if(err) return res.send(500);
+          res.send(profile);
+        })
+      }
+    })
+  });
+  ```
+
+</script>
+<aside class="notes">
+  Reason A: untestable
+</aside>
+</section>
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+  
+  # Reason A
+
+</script>
+<aside class="notes">
+  Untestable
+</aside>
+</section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## Untestable
+
+  - Either: loads of setup/tearDown
+  - Or: loads of stubbing
+  - Regardless of tool, don't inline everything
+
+  ```javascript
+  getUser(params["id"],function(err,user) {
+    // can't test
+    getProfile(user,function(err,profile) {
+      // can't test
+    })
+  });
+  ```
+
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## Reveal your callbacks
+
+  - OO or FP, needs to be testable
+
+  ```javascript
+  var ProfileCreateUpdate = function() { /* ... */ };
+
+  ProfileCreateUpdate.prototype = {
+    updateProfile: function(user,err,profile) {
+      /* code that needs testing */
+    }
+  };
+
+  it("handles profile fetch errors",function() {
+    profileCreateUpdate.updateProfile(null,{ error: "some error" });
+  })
+  ```
+
+</script></section>
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # Reason B
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## JS has tools
+
+  - `Function.prototype.bind` to the rescue
+  - `bind`: context without inlining
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+  
+  ## Pure-JS solution
+
+  - replace inline closures with `bind`
+
+  ```javascript
+  getUser(params["id"],gotUser);
+
+  function gotUser(err,user) {
+    if(!user) return res.send(404);
+    // don't inline closure, use bind
+    getProfile(user,saveProfile.bind(this,user));
+  }
+
+  function saveProfile(user,err,profile) {
+    if(err) return res.send(500);
+    if(profile) {
+      update(user,profile,params,saved);
+    } else {
+      create(user,params,saved);
+    }
+  }
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## How does bind work?
+
+  - Returns new function that's closer to ready
+  - Partially applied function
+  - You then call and fill in the rest
+  - `bind`: context without closures
+
+</script></section>
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+  
+  # We've won, right?
+
+</script>
+<aside class="notes">
+  Around  8 minutes
+</aside>
+</section>
+
+
+<section data-markdown data-state=bad><script type="text/template">
+  
+  # No :(
+
+</script></section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # What's still a pain?
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+  ## Parallel
+
+  - Sum of N processes completing
+  
+  ```
+  var updatedA = false;
+  var updatedB = false;
+  updateA(function() {
+    if(updatedB) done()
+    updatedA = true;
+  })
+  updateB(function() {
+    if(updatedA) done()
+    updatedB = true;
+  })
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+  ## Sets of jobs
+
+  - mapping, reducing, filtering
+  
+  ```
+  var files = [a,b,c,d];
+  var filtered = [];
+  var done = 0;
+  files.forEach(function(f) {
+    something(f,function(passed) {
+      done += 1;
+      if(!passed) return;
+      filtered.push(f);
+      if(done == files.length) cb(null,filtered);
+    })
+  });
+  ```
+
+</script></section>
+
+
+
+<section data-markdown><script type="text/template">
+
+  ## What's wrong?
+
+  - We're implementing flow control
+  - Lots of manual hand-holding of async
+  - Someone else must have written something...
+
+</script>
+</section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # Async.js!
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Tools for lots of processes
+
+  - Replaces ad-hoc code
+  - Nice library of enumerable operations
+  - All about handling multiple processes
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Chains
+
+  - Feeds results through sequence
+
+  ```javascript
+  async.waterfall([a,b,c],function(err,resultOfC) {
+    // async version of var d = _.compose(c,b,a);
+  })
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  
+  ## Parallel
+
+  - But: lose multiple errors as stops on first
+
+  ```javascript
+  async.parallel([a,b,c],function(err,results) {
+    results[1] // result of b
+  })
+  ```
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  
+  ## Enumeration
+
+  ```javascript
+  async.map([a,b,c],someTransform,function(transformedElements) {
+
+  })
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Interface
+
+  - node's callback signature (err,result)
+  - could do same for another scheme
+  - requires all code to match interface
+
+</script></section>
+
+
+<section data-markdown data-state=bad><script type="text/template">
+
+  ## But... it leaks
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## Solution is fragile
+
+  - e.g can't waterfall & keep all results
+
+  ```javascript
+  async.waterfall([
+    function(params,cb) {
+      getUser(params["id"],cb)
+    },
+    function(user,cb) {
+      getProfile(user,cb)
+    }
+  ],function(err,result) {
+    // oh no! only one result, need both
+    // back to manual code
+  });
+  ```
+</script></section>
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # What's the root problem?
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## No values
+
+  - Callbacks = functions don't return
+  - Without a return, can't do things with result of process
+  - Can't write logic with something we don't have
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## Easy with values
+  
+  ```javascript
+  var user = getUser(params["id"]);
+  if(!user) return res.send(404);
+
+  try {
+    var profile = getProfile(user);
+    if(profile) {
+      update(user,profile,params);
+    } else {
+      profile = create(user,params);
+    }
+    return res.send(profile);
+  } catch(e) {
+    res.send(500);
+  }
+  ```
+</script></section>
+
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # Values with async?
+
+</script>
+<aside class="notes">
+  14 minutes
+</aside>
+</section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # Promises
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## An IOU
+
+  - A promise is a value, returned immediately
+  - Later fulfilled or rejected - once
+  - Doesn't matter when you attach
+  - Can make a new promise for transform of original value
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ```
+  var promiseForA = getA();
+  // we immediately get a value to use
+  promiseForA.then(callback,errorBack);
+
+  // we don't get anything back
+  getA(function(err,a) {
+    // replaced values with flow control
+  });
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Is it useful?
+
+  - `then(successCb,failCb)`
+  - `then` itself returns a promise for return of cb
+  - chains!
+  - but: avoid broken versions: e.g jQuery's
+
+  ```
+  var promiseForB = getA().then(function(a) {
+    return getB(a);
+  },fail);
+  promiseForB // we get a promise for last in chain
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Promises in action
+
+  - Dependent processes: simple
+  - Multiple readers: simple
+  - Time doesn't matter with values
+
+  ```
+  var classifiedTweet = twitter.nextTweet()
+    .then(formatter.format)
+    .then(classifier.classify);
+
+  // easy to tag on extra operations
+  classifiedTweet.then(log);
+  classifiedTweet.then(save);
+  classifiedTweet.then(pushToUi);
+  ```
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+  
+  ## Multiple-dependencies
+
+  - Doesn't require nesting - we have values!
+
+  ```
+  var a = getA();
+  var b = a.then(getB)
+  var c = Q.when(a,b).then(C);
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+  
+  ## Parallel
+
+  - `all` gives promise for all
+  - use with `spread` to get all values
+
+  ```
+  var bothDone = Q.all(updateA,updateB);
+
+  bothDone.spread(function(a,b) {
+    /* use both */
+  });
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Enumerations
+
+  - No library code for maps to promises
+  - Still requires library for more interesting enumeration
+
+  ```
+  [fileA,fileB,fileC].map(function(f) {
+    return readFile(f)
+  }).map(function(contents) {
+    return contents.then(transform);
+  }) // list of promises for transformed content
+  ```
+
+</script></section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # Have we won yet?
+
+</script></section>
+
+
+<section data-markdown data-state=bad><script type="text/template">
+
+  # Not quite
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## Unwrapping
+
+  - Still have to unwrap
+  - Need to ensure we catch all errors
+  - Still doesn't work with basic tools
+
+  ```javascript
+  if(!user) {}
+
+  try {
+    var profile = getProfile(user);
+    if(profile) {
+    } else {
+    }
+  } catch(e) {
+  }
+  ```
+
+</script></section>
+
+<section data-markdown data-state=bad><script type="text/template">
+
+  # Real hell of async
+
+</script></section>
+
+
+<section data-markdown data-state=bad><script type="text/template">
+
+  # It took away Javascript!
+
+</script></section>
+
+
+<section data-markdown data-state=bad><script type="text/template">
+
+  # I give up
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Can't we just block please?
+
+  ```
+  // pseudo-code: not JS
+  try
+    // composes with flow-control
+    if(a = await A()) 
+      b = await B(a)
+      return await C(b)
+    else
+      return false
+  catch e
+    // got an error from A, B or C
+  ```
+</script></section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # Await... this might just work
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## Language-level
+
+  - Await gives us back lexical ordering 
+  - Therefore must be way of blocking on async
+  - Gives us back flow-control
+
+  ```
+  // pseudo-code: not JS
+  try
+    // composes with flow-control!
+    if(a = await A()) 
+      b = await B(a)
+      return await C(b)
+    else
+      return false
+  catch e
+    // got an error from A, B or C
+  ```
+
+</script></section>
+
+
+<section data-markdown data-state=bad><script type="text/template">
+
+  # But, not JS?
+
+</script></section>
+
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # JS, new JS!
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## ES6 to the rescue
+
+  - ES6 generators let us do this
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+  ## ES6 Generators
+
+  - In draft ES6 spec
+  - `yield` returns control to caller
+  - `yield` returns `{value,done}`
+
+  ```javascript
+  // fn* = I'm a generator, I can yield
+  function* count() {
+    var i = 0;
+    while (true) {
+        // yield returns control to caller
+        yield i++;
+    }
+  }
+
+  var counter = count();
+  count.next().value === 0;
+  count.next().value === 1;
+  count.next().value === 2;
+  ```
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Let's see some ES6
+
+  - Need glue to use as await
+  - Relies on either: promises or callback interface
+  - inside, `yield` gives return values from async
+
+  ```javascript
+  function threeQueries() {
+    return awaitable(function*() {
+      var a = queryOne();
+      var b = queryTwo();
+      var c = queryThree();
+      var results = [];
+      for(var promise of [a,b,c]) {
+        results.push(yield promise);
+      }
+      return result;
+    })
+  }
+  ```
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## How?
+
+  - Odds I'll get confused explaining: high
+  - Luckily: can be a black box
+
+  ```javascript
+  Q.async = function (makeGenerator) {
+      return function () {
+          function continuer(verb, arg) {
+              var result;
+              try {
+                  result = generator[verb](arg);
+              } catch(e) {
+                  return makeRejectedPromise(e);
+              }
+              if (result.done) { return result.value; }
+              else { return Q(result.value).then(callback, errback); }
+          }
+          var generator = makeGenerator.apply(this, arguments);
+          var callback = continuer.bind(continuer, "next");
+          var errback = continuer.bind(continuer, "throw");
+          return callback();
+      };
+  };
+  ```
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Dependent processes
+
+  - Very easy, we get back to line-by-line
+
+  ```
+  // fn* = I'm a generator, I can yield
+  awaitable(function*() {
+    var a,b,c;
+    yield a = A();
+    yield b = B(a);
+    return yield C(b);
+  })
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Parallel
+
+  - Only this easy with promises - time still enemy
+  - p.s Look how clean ES6 `for-of` makes code!
+
+  ```
+  awaitable(function*() {
+    var a = A();
+    var b = B();
+    for(var p of [a,b]) {
+      yield p;
+    }
+  })
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Enumerables
+
+  ```
+  awaitable(function*() {
+    var a = A();
+    var b = B();
+    var passed = [];
+    for(var p of [a,b]) {
+      var v = yield p
+      if(v) passed.push(v)
+    }
+    return passed;
+  })
+  ```
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Leaks the async
+
+  - Still not blocking our single thread
+  - This is good: knowing you're never pre-empted is a great JS feature
+  - Code that uses it will still need to await results
+
+</script></section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  # We won!
+
+</script></section>
+
+<section data-markdown><script type="text/template">
+
+  ## Utopia?
+
+  - We got Javascript back!
+  - Need to wrap code and use generators
+  - Leaks async - but that's good, threading hell
+
+</script></section>
+
+
+<section data-markdown><script type="text/template">
+
+  ## No more pyramids
+
+  - You should't inline everything - easy callback hell
+  - JS has tools for easy, real hell hard
+  - Ad-hoc solutions leak (even libraries)
+  - Promises for values, defeat time!
+  - Generators to compose with JS
+
+</script></section>
+
+<section data-markdown data-state=highlight><script type="text/template">
+
+  ## Thanks!
+
+  <br />
+  <br />
+  <br />
+
+  ### @timruffles
+  ### ask for SidekickJS beta + discount :)
+
+</script></section>
+
+
+</div>
+</div>
+
+<script src="reveal/lib/js/head.min.js"></script>
+<script src="reveal/js/reveal.min.js"></script>
+<script>
+  Reveal.initialize({
+
+    // Display controls in the bottom right corner
+    controls: false,
+
+    // Display a presentation progress bar
+    progress: true,
+
+    // Push each slide change to the browser history
+    history: true,
+
+    // Enable keyboard shortcuts for navigation
+    keyboard: true,
+
+    // Enable the slide overview mode
+    overview: true,
+
+    // Vertical centering of slides
+    center: false,
+
+    // Loop the presentation
+    loop: false,
+
+    // Change the presentation direction to be RTL
+    rtl: false,
+
+    // Number of milliseconds between automatically proceeding to the
+    // next slide, disabled when set to 0, this value can be overwritten
+    // by using a data-autoslide attribute on your slides
+    autoSlide: 0,
+
+    // Enable slide navigation via mouse wheel
+    mouseWheel: false,
+
+    // Apply a 3D roll to links on hover
+    rollingLinks: false,
+
+    // Transition style
+    transition: 'linear', // default/cube/page/concave/zoom/linear/fade/none
+
+    dependencies: [
+        // Cross-browser shim that fully implements classList - https://github.com/eligrey/classList.js/
+        { src: 'reveal/lib/js/classList.js', condition: function() { return !document.body.classList; } },
+
+        // Interreveal/pret Markdown in <section> elements
+        { src: 'reveal/plugin/markdown/showdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+        { src: 'reveal/plugin/markdown/markdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+
+        // Syntareveal/x highlight for <code> elements
+        { src: 'reveal/plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } },
+
+        // Zoom reveal/in and out with Alt+click
+        { src: 'reveal/plugin/zoom-js/zoom.js', async: true, condition: function() { return !!document.body.classList; } },
+
+        // Speakreveal/er notes
+        { src: 'reveal/plugin/notes/notes.js', async: true, condition: function() { return !!document.body.classList; } },
+
+        // Remotreveal/e control your reveal.js presentation using a touch device
+        // { src: 'reveal/plugin/remotes/remotes.js', async: true, condition: function() { return !!document.body.classList; } }
+    ]
+
+  });
+Reveal.addEventListener( 'highlight', function() {
+  console.log("state")
+}, false );
+  
+</script>
+</body>
